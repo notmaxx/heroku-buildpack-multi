@@ -4,60 +4,72 @@ set -e
 
 unset GIT_DIR
 
-for BUILDPACK in $(cat $1/$BUILDPACK_FILE); do
-  dir=$(mktemp -t buildpackXXXXX)
-  rm -rf $dir
+ENV_DIR=${3:-}
 
-  url=${BUILDPACK%#*}
-  branch=${BUILDPACK#*#}
+if [ -f $ENV_DIR/BUILDPACK_FILE ]; then
+  BUILDPACK_FILE=`cat $ENV_DIR/BUILDPACK_FILE`
+  echo "BUILDPACK_FILE: $BUILDPACK_FILE"
 
-  if [ "$branch" == "$url" ]; then
-    branch=""
-  fi
+  for BUILDPACK in $(cat $1/$BUILDPACK_FILE); do
+    dir=$(mktemp -t buildpackXXXXX)
+    rm -rf $dir
 
-  if [ "$url" != "" ]; then
-    echo "=====> Downloading Buildpack: $url"
+    url=${BUILDPACK%#*}
+    branch=${BUILDPACK#*#}
 
-    if [[ "$url" =~ \.tgz$ ]] || [[ "$url" =~ \.tgz\? ]]; then
-      mkdir -p "$dir"
-      curl -s "$url" | tar xvz -C "$dir" >/dev/null 2>&1
-    else
-      git clone $url $dir >/dev/null 2>&1
-    fi
-    cd $dir
-
-    if [ "$branch" != "" ]; then
-      git checkout $branch >/dev/null 2>&1
+    if [ "$branch" == "$url" ]; then
+      branch=""
     fi
 
-    # we'll get errors later if these are needed and don't exist
-    chmod -f +x $dir/bin/{detect,compile,release} || true
+    if [ "$url" != "" ]; then
+      echo "=====> Downloading Buildpack: $url"
 
-    framework=$($dir/bin/detect $1)
+      if [[ "$url" =~ \.tgz$ ]] || [[ "$url" =~ \.tgz\? ]]; then
+        mkdir -p "$dir"
+        curl -s "$url" | tar xvz -C "$dir" >/dev/null 2>&1
+      else
+        git clone $url $dir >/dev/null 2>&1
+      fi
+      cd $dir
 
-    if [ $? == 0 ]; then
-      echo "=====> Detected Framework: $framework"
-      $dir/bin/compile $1 $2 $3
+      if [ "$branch" != "" ]; then
+        git checkout $branch >/dev/null 2>&1
+      fi
 
-      if [ $? != 0 ]; then
+      # we'll get errors later if these are needed and don't exist
+      chmod -f +x $dir/bin/{detect,compile,release} || true
+
+      framework=$($dir/bin/detect $1)
+
+      if [ $? == 0 ]; then
+        echo "=====> Detected Framework: $framework"
+        $dir/bin/compile $1 $2 $3
+
+        if [ $? != 0 ]; then
+          exit 1
+        fi
+
+        # check if the buildpack left behind an environment for subsequent ones
+        if [ -e $dir/export ]; then
+          source $dir/export
+        fi
+
+        if [ -x $dir/bin/release ]; then
+          $dir/bin/release $1 > $1/last_pack_release.out
+        fi
+      else
+        echo "Couldn't detect any framework for this buildpack. Exiting."
         exit 1
       fi
-
-      # check if the buildpack left behind an environment for subsequent ones
-      if [ -e $dir/export ]; then
-        source $dir/export
-      fi
-
-      if [ -x $dir/bin/release ]; then
-        $dir/bin/release $1 > $1/last_pack_release.out
-      fi
-    else
-      echo "Couldn't detect any framework for this buildpack. Exiting."
-      exit 1
     fi
-  fi
-done
+  done
 
-if [ -e $1/last_pack_release.out ]; then
-  echo "Using release configuration from last framework ($framework)."
+  if [ -e $1/last_pack_release.out ]; then
+    echo "Using release configuration from last framework ($framework)."
+  fi
+
+  exit 0
 fi
+
+echo "BUILDPACK_FILE is undefined"
+exit 1
